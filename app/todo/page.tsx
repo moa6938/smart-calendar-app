@@ -1,7 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { supabase, subscribeToTasks } from '@/lib/supabase';
+import { useRouter } from 'next/navigation';
+import { createClient } from '@/utils/supabase/client';
+import { logout } from '../login/actions';
 
 // 타입 정의
 type Priority = 'low' | 'medium' | 'high';
@@ -18,7 +20,15 @@ interface Task {
   task_date: string;
 }
 
+interface User {
+  id: string;
+  email?: string;
+}
+
 export default function TodoPage() {
+  const router = useRouter();
+  const [supabase] = useState(() => createClient());
+  
   const [currentDate, setCurrentDate] = useState(new Date());
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
@@ -26,6 +36,8 @@ export default function TodoPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   // 폼 입력 상태
   const [todoInput, setTodoInput] = useState('');
@@ -33,20 +45,73 @@ export default function TodoPage() {
   const [modalTodoInput, setModalTodoInput] = useState('');
   const [modalPriority, setModalPriority] = useState<Priority>('medium');
 
-  // 초기 데이터 로드
+  // 사용자 인증 확인 및 초기 데이터 로드
   useEffect(() => {
-    loadTasks();
-    loadTheme();
+    const initialize = async () => {
+      // 현재 사용자 가져오기
+      const { data: { user: currentUser } } = await supabase.auth.getUser();
+      
+      if (!currentUser) {
+        // 로그인하지 않은 경우 로그인 페이지로 리다이렉트
+        router.push('/login');
+        return;
+      }
+      
+      setUser({
+        id: currentUser.id,
+        email: currentUser.email,
+      });
+      
+      // 태스크 로드
+      await loadTasks(currentUser.id);
+      loadTheme();
+    };
 
-    // Supabase 실시간 구독
-    const unsubscribe = subscribeToTasks(() => {
-      loadTasks();
-    });
+    initialize();
+
+    // Auth 상태 변경 구독
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        if (event === 'SIGNED_OUT') {
+          router.push('/');
+        } else if (session?.user) {
+          setUser({
+            id: session.user.id,
+            email: session.user.email,
+          });
+        }
+      }
+    );
 
     return () => {
-      unsubscribe();
+      subscription.unsubscribe();
     };
-  }, []);
+  }, [supabase, router]);
+
+  // 실시간 구독 설정
+  useEffect(() => {
+    if (!user) return;
+
+    const channel = supabase
+      .channel('tasks-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'tasks',
+          filter: `user_id=eq.${user.id}`,
+        },
+        () => {
+          loadTasks(user.id);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user, supabase]);
 
   // 테마 로드
   const loadTheme = () => {
@@ -70,13 +135,14 @@ export default function TodoPage() {
     }
   };
 
-  // Supabase에서 태스크 로드
-  const loadTasks = async () => {
+  // Supabase에서 태스크 로드 (사용자별 필터링)
+  const loadTasks = async (userId: string) => {
     try {
       setLoading(true);
       const { data, error } = await supabase
         .from('tasks')
         .select('*')
+        .eq('user_id', userId)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -89,10 +155,21 @@ export default function TodoPage() {
     }
   };
 
+  // 로그아웃 처리
+  const handleLogout = async () => {
+    setIsLoggingOut(true);
+    await logout();
+  };
+
   // 새 태스크 추가
   const addTask = async (text: string, taskPriority: Priority, date?: Date) => {
     if (!text || text.trim() === '') {
       alert('할 일을 입력해주세요.');
+      return;
+    }
+
+    if (!user) {
+      alert('로그인이 필요합니다.');
       return;
     }
 
@@ -102,6 +179,7 @@ export default function TodoPage() {
         priority: taskPriority,
         completed: false,
         task_date: formatDate(date || new Date()),
+        user_id: user.id,
       } as any).select().single();
 
       if (error) throw error;
@@ -333,12 +411,55 @@ export default function TodoPage() {
             <h1 className="text-3xl font-bold text-indigo-600 dark:text-indigo-400">
               스마트 캘린더 & 투두 리스트
             </h1>
-            <button
-              onClick={toggleTheme}
-              className="px-4 py-2 bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-medium text-gray-900 dark:text-gray-100 hover:bg-indigo-600 hover:text-white transition-all duration-200 hover:-translate-y-0.5"
-            >
-              {isDarkMode ? '라이트 모드' : '다크 모드'}
-            </button>
+            <div className="flex items-center gap-4">
+              {/* 사용자 이메일 표시 */}
+              {user?.email && (
+                <span className="text-sm text-gray-600 dark:text-gray-400 hidden sm:inline">
+                  {user.email}
+                </span>
+              )}
+              {/* 테마 토글 버튼 */}
+              <button
+                onClick={toggleTheme}
+                className="px-4 py-2 bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-medium text-gray-900 dark:text-gray-100 hover:bg-indigo-600 hover:text-white transition-all duration-200 hover:-translate-y-0.5"
+              >
+                {isDarkMode ? '라이트 모드' : '다크 모드'}
+              </button>
+              {/* 로그아웃 버튼 */}
+              <button
+                onClick={handleLogout}
+                disabled={isLoggingOut}
+                className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg text-sm font-medium transition-all duration-200 hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              >
+                {isLoggingOut ? (
+                  <>
+                    <svg
+                      className="animate-spin h-4 w-4 text-white"
+                      xmlns="http://www.w3.org/2000/svg"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <circle
+                        className="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                      ></circle>
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                      ></path>
+                    </svg>
+                    로그아웃 중...
+                  </>
+                ) : (
+                  '로그아웃'
+                )}
+              </button>
+            </div>
           </div>
         </div>
       </header>
