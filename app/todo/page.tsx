@@ -2,7 +2,21 @@
 
 import { useState, useEffect } from 'react';
 import { supabase, subscribeToTasks } from '@/lib/supabase';
-import type { Task, Priority, FilterType } from '@/lib/types/database';
+
+// 타입 정의
+type Priority = 'low' | 'medium' | 'high';
+type FilterType = 'all' | 'active' | 'completed' | 'high' | 'medium' | 'low';
+
+interface Task {
+  id: string;
+  created_at: string;
+  updated_at: string;
+  user_id: string | null;
+  text: string;
+  priority: Priority;
+  completed: boolean;
+  task_date: string;
+}
 
 export default function TodoPage() {
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -66,7 +80,7 @@ export default function TodoPage() {
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      setTasks(data || []);
+      setTasks((data as Task[]) || []);
     } catch (error: any) {
       console.error('태스크 로드 실패:', error?.message || error);
       alert(`데이터를 불러오는데 실패했습니다: ${error?.message || '테이블이 존재하지 않을 수 있습니다. Supabase에서 스키마를 실행해주세요.'}`);
@@ -88,13 +102,13 @@ export default function TodoPage() {
         priority: taskPriority,
         completed: false,
         task_date: formatDate(date || new Date()),
-      }).select().single();
+      } as any).select().single();
 
       if (error) throw error;
 
       // 즉시 UI 업데이트 (새 태스크를 목록 맨 앞에 추가)
       if (data) {
-        setTasks((prev) => [data, ...prev]);
+        setTasks((prev) => [data as Task, ...prev]);
       }
 
       // 입력 필드 초기화
