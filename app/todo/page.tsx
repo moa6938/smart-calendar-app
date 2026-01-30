@@ -532,7 +532,11 @@ export default function TodoPage() {
                     min-h-[80px] flex flex-col relative
                   `}
                 >
-                  <div className="text-sm font-medium">
+                  <div
+                    className={`text-sm font-medium ${
+                      day.isToday ? 'text-white' : 'text-gray-900 dark:text-gray-100'
+                    }`}
+                  >
                     {day.date.getDate()}
                   </div>
                   {day.taskCount > 0 && (
